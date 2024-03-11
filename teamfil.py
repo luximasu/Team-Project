@@ -28,7 +28,7 @@ class UAV:
 
     def is_target_within_field_of_view(self, target_position):
         # Check if the target is within the field of view of the UAV
-        dist_to_target = np.linalg.norm(target_position - self.position)
+        dist_to_target = np.linalg.norm(target_position - self.position) # !!!!!! This function works by already knowing the target location, we may need to change this !!!!!!
         return dist_to_target < self.field_of_view
 
     def is_uav_within_field_of_view(self, other_uav):
