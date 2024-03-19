@@ -1,159 +1,227 @@
 import numpy as np
 import matplotlib.pyplot as plt
+import matplotlib.animation as animation
+
+
+class Obstacle:
+    def __init__(self, position, radius):
+        self.position = position  # Position of the obstacle (center)
+        self.radius = radius  # Radius of the obstacle
+
+    def is_colliding(self, point):
+        distance = np.linalg.norm(point - self.position)
+        return distance <= self.radius
+
 
 class UAV:
-    def __init__(self, position, field_of_view):
+    def __init__(self, position, fov, targ_pos, obstacles=[], alpha=1, beta=1):
         self.position = position
-        self.velocity = np.zeros_like(position)
-        self.best_position = position
+        self.velocity = np.zeros(2)
+        self.color = 'blue'
+        self.no_hit = True
+        self.best_pos = self.position.copy()
         self.best_score = float('inf')
-        self.field_of_view = field_of_view
+        self.fov = fov
+        self.targ_pos = targ_pos
+        self.at_targ = False
+        self.use_aco = False
+        self.obstacles = obstacles  # List of obstacles
+        self.alpha = alpha  # ACO parameter alpha
+        self.beta = beta    # ACO parameter beta
+        self.pheromone_map = np.zeros(8)
 
-    def update_position_pso(self, target_position):
-        # Update velocity and position using PSO algorithm
-        # Placeholder for demonstration, random movement
-        self.velocity = np.random.uniform(-1, 1, self.position.shape)
+    def update_position(self, homebase, plot_area, step_size):
+        distance = np.linalg.norm(self.position - homebase)
+        self.is_targ_within_fov()
+
+        if not self.at_targ:
+            if (distance < plot_area) and (self.no_hit == True):
+                direction = (self.position - homebase) / distance
+                self.velocity = direction * step_size
+                self.position += self.velocity
+
+
+            elif (distance == plot_area) and (self.no_hit == True):
+                self.color = 'red'
+                self.no_hit = False
+            elif not self.at_targ:  
+                self.pso()
+                self.color = 'red'
+                self.no_hit = False
+            else:
+                self.color = 'red'
+                self.no_hit = False
+                self.use_aco = True 
+                self.aco(np.zeros(8))  # Placeholder for pheromone map
+        elif self.at_targ:
+                    self.color = 'green'
+                    self.no_hit = False
+                    self.use_aco = True 
+                    self.aco(np.zeros(8))  
+            # Check for obstacle collisions and avoid them
+        for obstacle in self.obstacles:
+                if obstacle.is_colliding(self.position):
+                    self.avoid_obstacle(obstacle)
+
+    def pso(self):
+        inertia_weight = 0.5  # Inertia weight
+        c_weight = 0.5  # Cognitive weight
+        s_weight = 0.5  # Social weight
+        max_velocity = 0.50  # Maximum velocity
+
+        personal_best_position = self.best_pos
+        global_best_position = self.targ_pos
+
+        # Update velocity
+        c_comp = c_weight * np.random.rand() * (personal_best_position - self.position)
+        s_comp = s_weight * np.random.rand() * (global_best_position - self.position)
+        self.velocity = inertia_weight * self.velocity + c_comp + s_comp
+
+        self.velocity = np.clip(self.velocity, -max_velocity, max_velocity)
+
         self.position += self.velocity
 
-        # Placeholder for demonstration, update best position based on distance to target
-        score = np.linalg.norm(self.position - target_position)
+        score = np.linalg.norm(self.position - self.targ_pos)
         if score < self.best_score:
-            self.best_position = self.position
+            self.best_pos = self.position.copy()
             self.best_score = score
 
-    def evaluate_fitness(self, target_position):
-        # Placeholder for demonstration, fitness function can be based on distance to target
-        score = np.linalg.norm(self.position - target_position)
+    def aco(self, pheromone_map):
+        probabilities = np.zeros(8)  # Placeholder for probabilities
+        total_probability = 0
+        self.color = 'green'
+
+        for direction in range(8):  
+            probabilities[direction] = (pheromone_map[direction] ** self.alpha) * ((1 / self.distance_to_target(direction)) ** self.beta)
+            total_probability += probabilities[direction]
+
+        total_probability = np.sum(probabilities)
+        if total_probability > 0:
+            probabilities /= total_probability
+
+        chosen_direction = np.random.multinomial(1, probabilities)
+        self.position += self.move_in_direction(chosen_direction)
+
+        self.update_pheromone_map(chosen_direction)
+    
+    def distance_to_target(self, direction):
+        next_position = self.position + self.move_in_direction(direction)
+        distance = np.linalg.norm(next_position - self.targ_pos)
+        return distance
+    
+    def move_in_direction(self, direction):
+        directions = np.array([[0, 1], [1, 1], [1, 0], [1, -1], [0, -1], [-1, -1], [-1, 0], [-1, 1]])
+        movement_vectors = directions * np.linalg.norm(self.velocity)
+        return movement_vectors
+    
+    def update_pheromone_map(self, direction, decay_rate=0.1, increment=0.1):
+        self.pheromone_map *= (1 - decay_rate)
+        self.pheromone_map[direction] += increment
+
+    def check_fit(self):
+        score = np.linalg.norm(self.position - self.targ_pos)
         return score
 
-    def is_target_within_field_of_view(self, target_position):
-        # Check if the target is within the field of view of the UAV
-        dist_to_target = np.linalg.norm(target_position - self.position) # !!!!!! This function works by already knowing the target location, we may need to change this !!!!!!
-        return dist_to_target < self.field_of_view
+    def is_targ_within_fov(self):
+        dist_2_targ = np.linalg.norm(self.targ_pos - self.position)
+        if dist_2_targ < self.fov:
+            self.at_targ = True
 
-    def is_uav_within_field_of_view(self, other_uav):
-        # Check if another UAV is within the field of view of this UAV
+        return dist_2_targ < self.fov
+
+    def is_uav_within_fov(self, other_uav):
         dist_between_uavs = np.linalg.norm(self.position - other_uav.position)
-        return dist_between_uavs < self.field_of_view * 2  # Adjust 2 as needed to prevent overlap
+        return dist_between_uavs < self.fov * 2
+    
+    def avoid_obstacle(self, obstacle):
+        avoidance_vector = self.position - obstacle.position
+        avoidance_vector /= np.linalg.norm(avoidance_vector)
+
+        avoidance_distance = 2 * obstacle.radius  
+        avoidance_offset = avoidance_distance * avoidance_vector
+        self.position += avoidance_offset
 
 class Swarm:
-    def __init__(self, num_uavs, target_position, field_of_view):
-        self.uavs = self.initialize_uavs(num_uavs, field_of_view)
-        self.target_position = target_position
-        self.use_pso = True
+    def __init__(self, num_uavs, homebase, plot_area, fov, targ_pos, num_obstacles=9):
+        self.num_uavs = num_uavs
+        self.homebase = homebase
+        self.plot_area = plot_area
+        self.fov = fov
+        self.targ_pos = targ_pos
+        # Generate random obstacle positions
+        self.obstacles = [Obstacle(np.random.uniform(low=-10, high=10, size=2), 0.3) for _ in range(num_obstacles)]
+        self.uavs = [UAV(np.random.uniform(low=-1, high=1, size=2), self.fov, self.targ_pos, self.obstacles) for _ in range(num_uavs)]
 
-    def initialize_uavs(self, num_uavs, field_of_view):
-        uavs = []
-        for _ in range(num_uavs):
-            # Generate random position for UAV
-            position = np.random.uniform(-10, 10, 2)
-            # Ensure no overlap with existing UAVs
-            while any(uav.is_uav_within_field_of_view(UAV(position, field_of_view)) for uav in uavs):
-                position = np.random.uniform(-10, 10, 2)
-            uavs.append(UAV(position, field_of_view))
-        return uavs
-
-    def simulate_step_pso(self):
+    def update_positions(self, step_size):
         for uav in self.uavs:
-            uav.update_position_pso(self.target_position)
+            uav.update_position(self.homebase, self.plot_area, step_size)
 
-    def evaluate_fitness(self):
+    def check_fit(self):
         for uav in self.uavs:
-            uav_best_score = uav.evaluate_fitness(self.target_position)
+            uav_best_score = uav.check_fit()
             if uav_best_score < uav.best_score:
                 uav.best_score = uav_best_score
-                uav.best_position = uav.position
+                uav.best_pos = uav.position
 
     def get_global_best_solution(self):
         best_score = float('inf')
-        best_position = None
+        best_pos = None
         for uav in self.uavs:
             if uav.best_score < best_score:
                 best_score = uav.best_score
-                best_position = uav.best_position
-        return best_position, best_score
+                best_pos = uav.best_pos
+        return best_pos, best_score
 
-    def switch_to_aco(self):
-        self.use_pso = False
+# Parameters
+num_uavs = 10  # Number of UAVs
+num_steps = 100  # Number of simulation steps
+step_size = 0.1  # Step size for movement
+homebase = np.array([0, 0])  # Homebase location
+plot_area = 10  # Size of the plotted area
+fov = 3.0  # Field of view
+# targ_pos = np.array(np.random.uniform(-5, 5, 2))
+targ_pos = (-7, 2)
 
-# Main simulation
-num_iterations_pso = 50
-num_iterations_aco = 50
-num_uavs = 10
-target_position = np.array([5, 5])
-field_of_view = 3.0  # Example field of view radius
+swarm = Swarm(num_uavs, homebase, plot_area, fov, targ_pos)
 
-swarm = Swarm(num_uavs, target_position, field_of_view)
+# position
+def update_positions(i):
+    global swarm
 
-# Visualization
-plt.figure()
-for i in range(num_iterations_pso):
-    swarm.simulate_step_pso()
-    swarm.evaluate_fitness()
-    best_position, best_score = swarm.get_global_best_solution()
+    swarm.update_positions(step_size)
+    swarm.check_fit()
+    best_pos, best_score = swarm.get_global_best_solution()
 
-    # Check if any UAV sees the target within its field of view
-    for uav in swarm.uavs:
-        if uav.is_target_within_field_of_view(target_position):
-            swarm.switch_to_aco()
-            break
-
-    if not swarm.use_pso:
-        break
-
-    # Clear previous plot
+    # Plot
     plt.clf()
+    plt.scatter(homebase[0], homebase[1], color='green', label='Homebase')
+    plt.scatter(targ_pos[0], targ_pos[1], color='purple', label='Target')
 
-    # Plot UAVs for PSO
-    plt.scatter(target_position[0], target_position[1], color='red', label='Target')
+    # Plot UAVs
     for uav in swarm.uavs:
-        plt.scatter(uav.position[0], uav.position[1], color='blue', marker='o')
-    plt.title(f"Iteration {i+1}: PSO - Best position = {best_position}, Best score = {best_score}")
+        plt.scatter(uav.position[0], uav.position[1], color=uav.color)
+
+    # Plot outer edge
+    circle = plt.Circle((0, 0), plot_area, color='green', fill=False, linestyle='--', label='Outer Edge')
+    plt.gca().add_artist(circle)
+
+    for obstacle in swarm.obstacles:
+        circle = plt.Circle(obstacle.position, obstacle.radius, color='red', alpha=0.5)
+        plt.gca().add_artist(circle)
+
+    plt.title('Swarm of UAVs Movement')
     plt.xlabel('X')
     plt.ylabel('Y')
+    plt.xlim(-plot_area, plot_area)
+    plt.ylim(-plot_area, plot_area)
     plt.legend()
-    plt.xlim(-15, 15)
-    plt.ylim(-15, 15)
-    plt.grid(True)
-    plt.pause(0.1)
 
-if not swarm.use_pso:
-    # Switched to ACO
-    print("Switching to ACO...")
+    if not uav.no_hit:
+        # Plot best position found
+        plt.scatter(best_pos[0], best_pos[1], color='red')
 
-    # Placeholder for ACO simulation
-    num_ants = 10
-    pheromone_map = np.zeros((100, 100))  # Placeholder for pheromone map
+# Create animation
+fig = plt.figure()
+ani = animation.FuncAnimation(fig, update_positions, frames=num_steps, interval=100)
 
-    for i in range(num_iterations_aco):
-    # Move ants and update UAV positions
-        for ant in range(num_ants):
-            for uav in swarm.uavs:
-            # Calculate direction towards the target position
-                direction_to_target = target_position - uav.position
-            # Normalize direction vector
-                direction_to_target /= np.linalg.norm(direction_to_target)
-            # Move the UAV towards the target position with a random step size
-                step_size = np.random.uniform(0, 1)
-                uav.position += step_size * direction_to_target
-
-    # Clear previous plot
-        plt.clf()
-
-    # Plot UAVs for ACO
-        plt.scatter(target_position[0], target_position[1], color='red', label='Target')
-    # Plot UAVs for ACO (green)
-        for uav in swarm.uavs:
-            plt.scatter(uav.position[0], uav.position[1], color='green', marker='o')
-        plt.title(f"Iteration {i+1}: ACO Simulation")
-        plt.xlabel('X')
-        plt.ylabel('Y')
-        plt.legend()
-        plt.xlim(-15, 15)
-        plt.ylim(-15, 15)
-        plt.grid(True)
-        plt.pause(0.1)
-
-    plt.show()
-
-# mother fucker
+plt.show()
