@@ -65,7 +65,6 @@ class Swarm:
         self.uavs = [UAV(np.random.uniform(low=-1, high=1, size=2), self.fov, self.targ_pos, self.obstacles) for _ in range(n_uavs)]
 
 
-
     def update_poss(self, step_size):
         
         for uav in self.uavs:
@@ -84,14 +83,12 @@ fov = 3.0  # Field of view
 targ_pos = np.array(np.random.uniform(-5, 5, 2))
 n_obstacles = 12
 
-swarm = Swarm(n_uavs, homebase, plot_area, fov, targ_pos)
+swarm = Swarm(n_uavs, homebase, plot_area, fov, targ_pos, n_obstacles)
 
 def update_poss(i):
     global swarm
 
     swarm.update_poss(step_size)
-
-
 
     
     plt.clf()
