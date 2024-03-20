@@ -24,7 +24,7 @@ class UAV:
         self.fov = fov
         self.targ_pos = targ_pos
         self.at_targ = False
-        self.use_aco = False
+        self.use_pso = False
         self.obstacles = obstacles  # List of obstacles
         self.alpha = alpha  # ACO parameter alpha
         self.beta = beta    # ACO parameter beta
@@ -48,16 +48,12 @@ class UAV:
                 self.pso()
                 self.color = 'red'
                 self.no_hit = False
-            else:
-                self.color = 'red'
-                self.no_hit = False
-                self.use_aco = True 
-                self.aco(np.zeros(8))  # Placeholder for pheromone map
+            
         elif self.at_targ:
                     self.color = 'green'
                     self.no_hit = False
                     self.use_aco = True 
-                    self.aco(np.zeros(8))  
+                    self.pso()  
             # Check for obstacle collisions and avoid them
         for obstacle in self.obstacles:
                 if obstacle.is_colliding(self.position):
@@ -86,23 +82,6 @@ class UAV:
             self.best_pos = self.position.copy()
             self.best_score = score
 
-    def aco(self, pheromone_map):
-        probabilities = np.zeros(8)  # Placeholder for probabilities
-        total_probability = 0
-        self.color = 'green'
-
-        for direction in range(8):  
-            probabilities[direction] = (pheromone_map[direction] ** self.alpha) * ((1 / self.distance_to_target(direction)) ** self.beta)
-            total_probability += probabilities[direction]
-
-        total_probability = np.sum(probabilities)
-        if total_probability > 0:
-            probabilities /= total_probability
-
-        chosen_direction = np.random.multinomial(1, probabilities)
-        self.position += self.move_in_direction(chosen_direction)
-
-        self.update_pheromone_map(chosen_direction)
     
     def distance_to_target(self, direction):
         next_position = self.position + self.move_in_direction(direction)
@@ -114,9 +93,6 @@ class UAV:
         movement_vectors = directions * np.linalg.norm(self.velocity)
         return movement_vectors
     
-    def update_pheromone_map(self, direction, decay_rate=0.1, increment=0.1):
-        self.pheromone_map *= (1 - decay_rate)
-        self.pheromone_map[direction] += increment
 
     def check_fit(self):
         score = np.linalg.norm(self.position - self.targ_pos)
@@ -126,11 +102,20 @@ class UAV:
         dist_2_targ = np.linalg.norm(self.targ_pos - self.position)
         if dist_2_targ < self.fov:
             self.at_targ = True
-
+        else: 
+            self.at_targ = False
         return dist_2_targ < self.fov
 
     def is_uav_within_fov(self, other_uav):
         dist_between_uavs = np.linalg.norm(self.position - other_uav.position)
+
+        avoidance_vector = self.position - other_uav.position
+        avoidance_vector /= np.linalg.norm(avoidance_vector)
+
+        avoidance_distance = 2 * (3 + self.fov)  
+        avoidance_offset = avoidance_distance * avoidance_vector
+        self.position += avoidance_offset
+
         return dist_between_uavs < self.fov * 2
     
     def avoid_obstacle(self, obstacle):
@@ -153,8 +138,18 @@ class Swarm:
         self.uavs = [UAV(np.random.uniform(low=-1, high=1, size=2), self.fov, self.targ_pos, self.obstacles) for _ in range(num_uavs)]
 
     def update_positions(self, step_size):
+        target_detected = False  # Flag to track if the target is detected by any UAV
         for uav in self.uavs:
-            uav.update_position(self.homebase, self.plot_area, step_size)
+            if not uav.at_targ:
+                uav.update_position(self.homebase, self.plot_area, step_size)
+            else:
+                target_detected = True
+
+        if target_detected:
+            for uav in self.uavs:
+                uav.use_pso = True
+                uav.pso()
+
 
     def check_fit(self):
         for uav in self.uavs:
@@ -180,11 +175,10 @@ homebase = np.array([0, 0])  # Homebase location
 plot_area = 10  # Size of the plotted area
 fov = 3.0  # Field of view
 # targ_pos = np.array(np.random.uniform(-5, 5, 2))
-targ_pos = (-7, 2)
+targ_pos = (-6, 5)
 
 swarm = Swarm(num_uavs, homebase, plot_area, fov, targ_pos)
 
-# position
 def update_positions(i):
     global swarm
 
